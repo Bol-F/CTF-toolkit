@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1016">
+  <meta name="description" content="Self-hosted steganography and file forensics. Inspect evidence with local analysis tools.">
+  <title>StegoLab — Local forensics workbench</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 30 16 16 30 2 16Z' fill='%23c5f17c'/%3E%3Cpath d='m12 10 8 6-8 6' fill='none' stroke='%230b1016' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <aside class="sidebar" aria-label="Application navigation">
+    <a class="brand" href="#analysis" aria-label="StegoLab home">
+      <svg viewBox="0 0 32 32" class="brand-mark" aria-hidden="true"><path d="M16 2 30 16 16 30 2 16Z"/><path d="m12 10 8 6-8 6"/></svg>
+      <span><strong>StegoLab</strong><small>Local forensics workbench</small></span>
+    </a>
+    <nav>
+      <a href="#analysis" class="nav-link active" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h6l2 3h10v12H3Z"/></svg><span>Analysis</span></a>
+      <a href="#jobs" class="nav-link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span>Jobs</span><span id="job-count" class="nav-count" hidden></span></a>
+      <a href="#tools" class="nav-link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6 4 4 4-4a7 7 0 0 1-9 9l-7 7-4-4 7-7a7 7 0 0 1 9-9Z"/></svg><span>Tools</span></a>
+      <a href="#utilities" class="nav-link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg><span>Utilities</span></a>
+    </nav>
+    <div class="sidebar-note"><span class="privacy-dot"></span><div>Evidence stays local<small>Self-hosted · Open source</small></div></div>
+  </aside>
+  <div class="app">
+    <header class="topbar"><h1 id="page-title">Analysis</h1><div class="worker-state" id="worker-state" role="status"><span class="status-dot"></span><span id="worker-label">Connecting to worker</span></div></header>
+    <main id="main" tabindex="-1">
+      <div id="notification" class="notification" role="alert" hidden></div>
+      <section id="view-analysis" class="view" aria-label="File analysis">
+        <div class="page-heading"><div><h2>Find what is hidden.</h2><p>Inspect files, uncover embedded content, and follow the evidence.</p></div><fieldset class="scan-mode"><legend class="sr-only">Analysis mode</legend><label><input type="radio" name="mode" value="quick" checked><span>Quick scan</span></label><label><input type="radio" name="mode" value="deep"><span>Deep scan</span></label></fieldset></div>
+        <section class="upload-panel" aria-label="Upload evidence">
+          <div id="drop-zone" class="drop-zone">
+            <svg class="upload-icon" viewBox="0 0 56 64" aria-hidden="true"><path d="M10 3h23l15 15v42H10Z"/><path d="M33 3v16h15M29 48V29m-9 9 9-9 9 9"/></svg>
+            <h3 id="upload-title">Drop a file to begin</h3><p id="upload-description">Images, audio, archives, documents, and binary files</p>
+            <button type="button" class="button primary" id="choose-file">Choose evidence file</button><input type="file" id="file-input" class="sr-only" tabindex="-1" aria-label="Evidence file">
+            <span id="file-limit" class="file-limit"></span>
+          </div>
+          <p class="upload-note">Original files are preserved. Processing happens inside Docker.</p>
+        </section>
+        <section id="job-progress" class="job-progress panel" aria-label="Analysis progress" hidden>
+          <div class="progress-top"><div><strong id="progress-filename"></strong><span id="progress-stage" role="status"></span></div><button class="button secondary small" id="cancel-job" type="button">Cancel scan</button></div>
+          <div class="progress-track" id="progress-bar" role="progressbar" aria-label="Analysis progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div><div class="progress-bottom"><span id="progress-detail"></span><span id="progress-percent"></span></div>
+        </section>
+        <section class="workspace panel" aria-labelledby="workspace-title">
+          <div class="workspace-heading"><h3 id="workspace-title">Evidence workspace</h3><span id="evidence-state" class="muted-state"><span class="status-dot"></span>Awaiting evidence</span></div>
+          <div id="evidence-summary" class="evidence-summary" hidden></div>
+          <div class="workspace-toolbar"><div class="tabs" role="tablist" aria-label="Evidence results"><button id="tab-findings" type="button" role="tab" aria-selected="true" aria-controls="result-content" data-tab="findings" tabindex="0">Findings<span id="finding-count"></span></button><button id="tab-metadata" type="button" role="tab" aria-selected="false" aria-controls="result-content" data-tab="metadata" tabindex="-1">Metadata</button><button id="tab-strings" type="button" role="tab" aria-selected="false" aria-controls="result-content" data-tab="strings" tabindex="-1">Strings</button><button id="tab-hex" type="button" role="tab" aria-selected="false" aria-controls="result-content" data-tab="hex" tabindex="-1">Hex</button><button id="tab-artifacts" type="button" role="tab" aria-selected="false" aria-controls="result-content" data-tab="artifacts" tabindex="-1">Artifacts</button><button id="tab-report" type="button" role="tab" aria-selected="false" aria-controls="result-content" data-tab="report" tabindex="-1">Report</button></div><a id="report-download" class="text-link" href="#" download hidden>Export JSON <span aria-hidden="true">↗</span></a></div>
+          <div id="result-content" class="result-content" role="tabpanel" aria-labelledby="tab-findings" tabindex="0"><div class="empty-state"><svg viewBox="0 0 72 72" aria-hidden="true"><path d="M11 6h27l14 14v15M11 6v58h26M38 6v15h14"/><circle cx="47" cy="47" r="14"/><path d="m57 57 11 11"/></svg><h4>Your investigation starts here</h4><p>Upload evidence to inspect findings, signatures, and extracted files.</p></div></div>
+        </section>
+        <div class="workflow-footer" aria-label="Analysis workflow"><span><b>01</b>Upload evidence</span><span><b>02</b>Run local analyzers</span><span><b>03</b>Explore findings</span></div>
+      </section>
+      <section id="view-jobs" class="view" aria-labelledby="jobs-title" hidden><div class="page-heading"><div><h2 id="jobs-title">Analysis history</h2><p>Return to evidence and reports from this local instance.</p></div><button class="button secondary" type="button" id="refresh-jobs">Refresh jobs</button></div><div class="panel" id="jobs-list"><div class="loading-state">Loading analysis history…</div></div></section>
+      <section id="view-tools" class="view" aria-labelledby="tools-title" hidden><div class="page-heading"><div><h2 id="tools-title">Your local toolkit</h2><p>Analyzer availability, versions, and execution limits from this worker.</p></div><button class="button secondary" type="button" id="refresh-tools">Refresh tools</button></div><div id="tools-summary" class="tools-summary"></div><div id="tools-list" class="tools-list panel"><div class="loading-state">Loading tool registry…</div></div></section>
+      <section id="view-utilities" class="view" aria-labelledby="utilities-title" hidden><div class="page-heading"><div><h2 id="utilities-title">Decode the next clue.</h2><p>Encoding, hashing, and text transforms, processed locally.</p></div></div><form id="utility-form" class="utility-panel panel"><div class="utility-controls"><div class="form-field"><label for="utility-operation">Operation</label><select id="utility-operation" name="operation"><option value="base64_decode">Base64 → text</option><option value="base64_encode">Text → Base64</option><option value="hex_decode">Hex → text</option><option value="hex_encode">Text → hex</option><option value="rot13">ROT13</option><option value="url_decode">URL decode</option><option value="url_encode">URL encode</option><option value="hashes">Calculate hashes</option><option value="xor">XOR (UTF-8 text → hex)</option></select></div><div class="form-field" id="xor-key-field" hidden><label for="xor-key">XOR key (hexadecimal)</label><input id="xor-key" name="key" autocomplete="off" placeholder="e.g. 41ff"></div></div><div class="utility-columns"><div class="form-field"><label for="utility-input">Input</label><textarea id="utility-input" name="text" rows="12" placeholder="Paste the text you want to inspect…" spellcheck="false" required></textarea></div><div class="form-field"><div class="label-row"><label for="utility-output">Result</label><button class="text-link" id="copy-result" type="button" disabled>Copy result</button></div><textarea id="utility-output" rows="12" placeholder="Your result will appear here." readonly spellcheck="false"></textarea></div></div><div class="utility-actions"><button class="button primary" id="run-utility" type="submit">Run transform <span aria-hidden="true">→</span></button><span id="utility-status" role="status"></span></div></form></section>
+    </main>
+    <footer class="app-footer"><span>StegoLab</span><span>Local analysis. Original evidence.</span></footer>
+  </div>
+</body>
+</html>
