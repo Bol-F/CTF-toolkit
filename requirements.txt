@@ -3,3 +3,5 @@ uvicorn==0.54.0
 python-multipart==0.0.32
 Pillow==13.0.0
 python-magic==0.4.27
+numpy==2.5.4
+regex==2026.9.29

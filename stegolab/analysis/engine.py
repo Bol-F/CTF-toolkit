@@ -100,7 +100,7 @@ def flag_findings(data: bytes, *, source="original", base_offset=0, maximum=200)
     if best is not None:
         accepted.append(best)
     for start, end, encoding in accepted:
-        contents.append((encoding, data[start:min(end, start + 65536)].decode(encoding).encode("ascii"), 2, start))
+        contents.append((encoding, data[start:end].decode(encoding).encode("ascii"), 2, start))
     for encoding, content, multiplier, start_offset in contents:
         next_allowed = 0
         for match in FLAG_PREFIX_RE.finditer(content):
@@ -167,10 +167,14 @@ class Analysis:
         self.generated_bytes = 0
         self.file_end = None
 
-    def artifact(self, name, data: bytes, media_type="text/plain", kind="analysis"):
+    def artifact(self, name, data: bytes, media_type="text/plain", kind="analysis", max_bytes=None):
         if len(self.report["artifacts"]) >= self.limits.max_artifacts:
             raise ValueError("Artifact count limit reached")
-        data = data[:MAX_OUTPUT]
+        if max_bytes is not None:
+            if len(data) > max_bytes:
+                raise ValueError(f"Artifact {name} exceeds its byte limit")
+        else:
+            data = data[:MAX_OUTPUT]
         if self.generated_bytes + len(data) > self.limits.max_extracted_bytes:
             raise ValueError("Generated artifact byte quota reached")
         artifact_id = uuid.uuid4().hex
@@ -427,8 +431,12 @@ class Analysis:
     def extraction(self):
         if self.mode != "deep":
             return stage("recursive_extraction", status="skipped", reason="Deep Scan enables bounded archive extraction")
-        remaining_count = max(0, self.limits.max_artifacts - len(self.report["artifacts"]))
-        remaining_bytes = max(0, self.limits.max_extracted_bytes - self.generated_bytes)
+        kind = self.report["file"]["format"]
+        tool_slots = sum(1 for tool in self.tools if tool["available"] and tool["name"] not in {"strings", "xxd"} and ("*" in tool["formats"] or kind in tool["formats"]))
+        # Reserve space for later diagnostic outputs, so a full archive quota
+        # cannot crowd all file-type-specific analyzers out of the report.
+        remaining_count = max(0, self.limits.max_artifacts - len(self.report["artifacts"]) - tool_slots)
+        remaining_bytes = max(0, self.limits.max_extracted_bytes - self.generated_bytes - tool_slots * MAX_OUTPUT)
         from dataclasses import replace
         extractor = Extractor(self.root, replace(self.limits, max_artifacts=remaining_count, max_extracted_bytes=remaining_bytes))
         extractor.extract(self.original)
@@ -477,6 +485,8 @@ class Analysis:
         tool = self.tool_by_name[name]
         if not tool["available"]:
             return stage(name, errors=[f"Optional tool {name} is unavailable in this worker"], status="unavailable")
+        if SPECS[name].get('manual'):
+            return stage(name, status='skipped', reason='Explicit lab action only; never started automatically')
         kind = self.report["file"]["format"]
         if name in {"strings", "xxd"}:
             return stage(name, status="skipped", reason="Native offset-aware strings / hexadecimal analyzer provides bounded equivalent output")
@@ -521,6 +531,8 @@ class Analysis:
         # zbar exit 4 explicitly means no symbols, which is a valid negative result.
         if name == "zbarimg" and result["returncode"] == 4:
             status = "completed"
+        if status == "failed" and result["returncode"] is not None:
+            errors.append(f"Tool exited with status {result['returncode']}")
         artifact = self.artifact(f"{name}.txt", (output + ("\nSTDERR:\n" + result["stderr"] if result["stderr"] else "")).encode())
         findings = [finding("tool_output", f"{name} output", output[:8192] or "No stdout findings", confidence=.8, artifact_id=artifact["id"])]
         parsed = None
@@ -580,7 +592,17 @@ class Analysis:
             names = list(SPECS)
             for i, name in enumerate(names):
                 self.run_stage(name, 56 + round(i / len(names) * 40), lambda name=name: self.cli_tool(name))
+            from ..labs.image import analyze_image
+            from ..labs.audio import analyze_audio
+            from ..labs.forensics import analyze_forensics
+            from ..labs.flags import scan_report
+            from ..labs.recommendations import recommend
+            self.run_stage('image_lab', 96, lambda: analyze_image(self))
+            self.run_stage('audio_lab', 97, lambda: analyze_audio(self))
+            self.run_stage('file_forensics', 98, lambda: analyze_forensics(self))
+            self.run_stage('central_flags', 99, lambda: scan_report(self))
             self.recommendations()
+            self.report['recommended_operations'] = recommend(self.report)
         self.report["completed_at"] = utc_now()
         self.report["limits"] = {"max_file_bytes": self.limits.max_file_bytes, "max_generated_bytes": self.limits.max_extracted_bytes, "max_artifacts": self.limits.max_artifacts, "max_extraction_depth": self.limits.max_depth, "max_compression_ratio": self.limits.max_ratio, "max_report_bytes": 4 * 1024 * 1024}
         self.bound_report()

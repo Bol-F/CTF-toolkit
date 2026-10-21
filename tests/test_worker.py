@@ -32,7 +32,7 @@ def wait_for(predicate, *, seconds=12, description="condition"):
 
 
 @contextmanager
-def worker(settings: Settings):
+def worker(settings: Settings, tool_path=''):
     env = dict(os.environ)
     env.update({
         "STEGOLAB_DATA_DIR": str(settings.data_dir),
@@ -41,7 +41,7 @@ def worker(settings: Settings):
         "STEGOLAB_DEEP_TIMEOUT": str(settings.deep_timeout),
         "STEGOLAB_JOB_MEMORY_MB": str(settings.memory_mb),
         "STEGOLAB_MAX_FILE_MB": str(settings.max_file_bytes // (1024 * 1024)),
-        "PATH": "",  # Exercise real native analyzers, with optional programs absent.
+        "PATH": tool_path,  # Default tests exercise native analyzers with optional tools absent.
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
     })
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -88,8 +88,10 @@ def terminal(store, job_id):
 
 
 def slow_evidence():
-    # A benign regex-heavy CTF text file. No uploaded programs are executed.
-    return b"flag{" * (6 * 1024 * 1024)
+    # Real bounded candidate scanning under CPU pressure. The closing delimiter
+    # prevents the scanner's valid fast path for data with no complete candidate.
+    # No uploaded programs or test-only executables are run, even with /tmp noexec.
+    return b"flag{" * (6 * 1024 * 1024) + b"}"
 
 
 def test_api_worker_report_artifact_and_delete_complete_flow(tmp_path: Path, corpus):
@@ -126,7 +128,12 @@ def test_running_cancel_and_bounded_concurrency_preserve_originals(tmp_path: Pat
         children = Path(f"/proc/{process.pid}/task/{process.pid}/children")
         child_ids = wait_for(lambda: children.read_text().split(), description="restricted analyzer child")
         assert len(child_ids) == 1
-        child_limits = Path(f"/proc/{child_ids[0]}/limits").read_text()
+        # /proc exposes the fork before Popen's preexec limits and exec finish.
+        # Wait for the analyzer module, rather than inspecting that transient fork.
+        child_proc = Path(f"/proc/{child_ids[0]}")
+        wait_for(lambda: b"stegolab.analyze" in (child_proc / "cmdline").read_bytes(),
+                 description="analyzer exec after resource limits")
+        child_limits = (child_proc / "limits").read_text()
         address_limit = next(line for line in child_limits.splitlines() if line.startswith("Max address space"))
         assert str(512 * 1024 * 1024) in address_limit
         cpu_limit = next(line for line in child_limits.splitlines() if line.startswith("Max cpu time"))

@@ -1,0 +1,2 @@
+#!/bin/sh
+exec java -Xms16m -Xmx256m -XX:+UseSerialGC -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=64m -XX:CompressedClassSpaceSize=32m -XX:MaxDirectMemorySize=16m -Xss256k -Djava.awt.headless=true -Duser.home="${HOME:-/tmp}" -Djava.io.tmpdir="${TMPDIR:-/tmp}" -jar /opt/openstego/openstego.jar "$@"

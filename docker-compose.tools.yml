@@ -1,0 +1,8 @@
+# Optional steganography tools are installed only in this worker variant.
+# docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --build
+services:
+  worker:
+    image: stegolab:tools
+    build:
+      context: .
+      target: tools

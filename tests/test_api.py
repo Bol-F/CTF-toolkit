@@ -88,6 +88,20 @@ def test_origin_host_and_response_headers(client):
     assert client.post("/api/utilities", headers={"origin": "http://testserver"}, json={"operation": "rot13", "text": "synt{ncv}"}).json()["result"] == "flag{api}"
 
 
+def test_workbench_and_api_reference_serve_all_assets_locally(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "StegoLab" in page.text
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/styles.css").status_code == 200
+    docs = client.get("/docs")
+    assert docs.status_code == 200
+    assert "OpenAPI JSON schema" in docs.text
+    assert "cdn.jsdelivr.net" not in docs.text
+    assert "unpkg.com" not in docs.text
+    assert "/api/jobs" in client.get("/openapi.json").json()["paths"]
+
+
 def test_request_cap_checks_declared_and_streamed_bytes(client):
     assert client.post("/api/jobs", content=b"", headers={"content-length": "2000000"}).status_code == 413
     boundary = "stegolab-test-boundary"

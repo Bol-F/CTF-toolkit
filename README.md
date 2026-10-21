@@ -30,6 +30,17 @@ The `stegolab-data` volume retains evidence/reports across restarts and `down`. 
 
 The responsive browser workbench provides progress, cancellation, history, deletion, searchable findings/strings, metadata, hex, analyzer notices, artifact downloads, JSON export, tool status and encoding/hash/XOR utilities. XOR accepts a repeating hexadecimal key over UTF-8 input and returns hex. MD5/SHA-1 support forensic comparison, not password storage.
 
+### Interactive analysis labs
+
+- **Image lab:** immediate RGB/alpha channel and bit-plane 0–7 views, inversion, brightness/contrast/gamma, absolute difference, zoom and PNG export. Worker-native LSB extraction supports ordered RGBA channels, ordered bit planes, row/column traversal, reverse pixel direction, MSB/LSB byte packing, frame selection and bit skipping. PNG chunk/CRC inspection, appended data, GIF frame timing/difference/extraction and unusual metadata findings are included.
+- **Forensics:** paged HEX/ASCII bytes with decimal/hex offsets, byte selection, clickable chunk/embedded-region maps, entropy plot, archive member explorer, and recursive inspection of extracted artifacts. A separate validation stage distinguishes complete embedded structures from magic-byte candidates.
+- **Audio lab:** playback, waveform, per-channel PCM downloads, interactive/zoomable spectrogram, frequency spectrum and peaks, stereo separation, SoX statistics, FFmpeg metadata/encoding checks and spectrogram PNG export.
+- **Crypto lab:** byte-preserving, reorder-by-removal/addition recipes with intermediate results and final-byte download. Base64/32/85, hex, binary/decimal/ASCII, URL, ROT13/47, Caesar, Atbash, Vigenere, XOR, reverse text/bytes, hashes, gzip/zlib and UTF-8/Unicode escape operations are supported.
+- **Flag Finder:** scans original evidence, metadata, decoded strings, extracted members, LSB output, OCR and QR contents. Configurable prefixes and a timeout-bounded custom regex are supported. Candidates retain source, offsets when known, method, transformation history and evidence. A confirmed **pattern match** does not guarantee a challenge answer.
+- **Recommendations:** deterministic operations with specific evidence and an explanation of why the check may help. No hidden-message guarantees.
+
+See [lab behavior and limits](docs/LABS.md). Native parsing and extraction stay in the network-disabled worker; the browser renders only generated PNG/PCM previews and visual transformations of those sanitized pixels. No raw uploaded image/audio is rendered inline.
+
 ## Tools
 
 The Tools screen and `/api/tools` report actual worker versions, formats, fixed parameters, availability, limits, parser and error handling. Missing optional tools return `unavailable`, inapplicable/mode-excluded checks return `skipped`, and failures do not abort native analysis.
@@ -50,6 +61,17 @@ The Tools screen and `/api/tools` report actual worker versions, formats, fixed 
 | pdfdetach | Attachment inventory |
 | zsteg | PNG/BMP bit-plane checks |
 | steghide | Capacity/metadata with empty password; no guessing |
+| SoX | Audio statistics on normalized PCM previews |
+
+Specialized tools are explicit tasks, never automatic password sweeps. The core includes zsteg and steghide; additional supported tools are installed in a separate optional worker variant:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --build
+```
+
+That variant adds StegSeek 0.6, StegoVeritas 1.11 (metadata-only), OutGuess 0.4, OpenStego 0.8.6 and StegSnow. StegDetect is deliberately unavailable: its archived source has no verified supported build here. Inventory entries include installation, license and compatibility information; an entry alone is not a claim that a program is installed. See [tool sources and compatibility](docs/TOOLS.md).
+
+Steghide/OutGuess/OpenStego/StegSnow accept supplied passwords. StegSeek accepts only a user-supplied list of at most 1,000 candidates, one thread and a 20-second deadline, against the selected uploaded artifact. Passwords/wordlists are removed on completion or cancellation, and diagnostics redact them. Extracted output filenames are fixed or generated.
 
 Docker installs these programs except optional xxd. Quick Scan runs applicable file, ExifTool and pngcheck checks; Deep Scan runs remaining applicable tools. Damaged input can still cause a tool to fail. Review per-analyzer statuses and bounded diagnostics. Updated Debian packages supply security patches; periodically rebuild for updates.
 
@@ -91,7 +113,7 @@ Other defaults: 32 active jobs; 1,000 retained jobs; 64 MiB shared generated/ext
 
 ## API and tests
 
-Interactive API docs: `/docs`.
+Offline API reference: `/docs`; machine-readable schema: `/openapi.json`.
 
 ```sh
 curl -F 'file=@challenge.png' -F 'mode=deep' http://127.0.0.1:8000/api/jobs
@@ -119,6 +141,7 @@ python -m venv .venv
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python -m tests.fixtures.corpus ./sample-evidence
+python -m tests.fixtures.advanced ./sample-evidence/advanced
 ```
 
 Upload generated `image.png` using Deep Scan. Host installations lacking CLI tools report them unavailable. Uploaded programs are never executed.
@@ -127,6 +150,6 @@ Upload generated `image.png` using Deep Scan. Host installations lacking CLI too
 
 Local single-user use only: no authentication or tenant isolation. Keep loopback binding. Containers/resource limits reduce malformed-input risk but are not a malware-detonation sandbox. Jobs share one worker UID and data volume; directories are application isolation, not separate container filesystems. A compromised native decoder could access shared evidence. Never mount host directories or the Docker socket.
 
-Extraction supports ZIP/TAR/gzip; encrypted ZIP, ZIP64, RAR and 7z are not automatically unpacked. Generic signature matches are heuristic; carving targets recognized appended content. PDF attachments are inventoried; steghide uses an empty password. No cracking, spectrogram editor, interactive LSB planes, arbitrary CLI endpoint, exhaustive carving or distributed workers. Bounded output/previews can miss content beyond limits; review execution/truncation notices. Pipeline completion can include optional analyzer failures.
+Extraction supports ZIP/TAR/gzip; encrypted ZIP, ZIP64, RAR and 7z are not automatically unpacked. Generic signature matches remain heuristic until container checks succeed; validation does not establish payload authenticity. PDF attachment inventory and explicit numbered attachment extraction are available. StegoVeritas is restricted to metadata, and StegDetect is unsupported. Image previews resize to 1024px, native LSB extraction is limited to 8 million pixels, GIF extraction to 16 frames/16 million aggregate pixels, and audio previews to 30 seconds. The audio lab is an inspection tool, without destructive editing or arbitrary plug-ins. Bounded decoding/previews can miss content beyond limits; review execution notices. Pipeline completion can include optional analyzer failures.
 
 Source: [MIT license](LICENSE). Bundled tools retain their respective licenses.

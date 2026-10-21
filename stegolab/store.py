@@ -50,6 +50,9 @@ class Store:
                 );
                 CREATE TABLE IF NOT EXISTS worker_state (id INTEGER PRIMARY KEY, heartbeat REAL NOT NULL);
             """)
+            db.execute('BEGIN IMMEDIATE')
+            if 'parent_id' not in {row[1] for row in db.execute('PRAGMA table_info(jobs)')}:
+                db.execute('ALTER TABLE jobs ADD COLUMN parent_id TEXT')
 
     @contextmanager
     def connect(self):
@@ -64,7 +67,7 @@ class Store:
         finally:
             db.close()
 
-    def reserve(self, filename, mode):
+    def reserve(self, filename, mode, parent_id=None):
         settings = self.settings
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -76,8 +79,8 @@ class Store:
             if reserved + settings.reservation_bytes > settings.max_storage_bytes:
                 raise CapacityError("Storage budget reached. Delete finished jobs before uploading.")
             job_id = uuid.uuid4().hex
-            db.execute("INSERT INTO jobs(id,filename,mode,status,created_at,reserved_bytes) VALUES(?,?,?,?,?,?)",
-                       (job_id, filename, mode, "uploading", now(), settings.reservation_bytes))
+            db.execute("INSERT INTO jobs(id,filename,mode,status,created_at,reserved_bytes,parent_id) VALUES(?,?,?,?,?,?,?)",
+                       (job_id, filename, mode, "uploading", now(), settings.reservation_bytes, parent_id))
         return job_id
 
     def enqueue(self, job_id, size, sha256):
@@ -123,6 +126,10 @@ class Store:
     def delete(self, job_id):
         with self.connect() as db:
             db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+    def active_children(self, job_id):
+        with self.connect() as db:
+            return db.execute("SELECT COUNT(*) FROM jobs WHERE parent_id=? AND status IN ('uploading','queued','running')", (job_id,)).fetchone()[0]
 
     def recover(self):
         with self.connect() as db:

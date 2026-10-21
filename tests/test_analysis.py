@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 from pathlib import Path
 
 import pytest
 
-from stegolab.analysis.engine import analyze_job
+from stegolab.analysis.engine import analyze_job, flag_findings
 from stegolab.analysis.extraction import Limits
 
 
@@ -129,3 +130,36 @@ def test_hash_mismatch_is_reported_as_evidence_integrity_finding(tmp_path: Path)
     (job / "evidence" / "original.bin").write_bytes(b"changed evidence")
     report = analyze_job(job, "quick")
     assert any(finding["type"] == "integrity" and "hash mismatch" in finding["title"].lower() for finding in report["findings"])
+
+
+@pytest.mark.parametrize("value,expected", [
+    (b"flag{}", []),
+    (b"flag{" + b"x" * 256 + b"}", ["flag{" + "x" * 256 + "}"]),
+    (b"flag{" + b"x" * 257 + b"}", []),
+    (b"flag{broken\nline}", []),
+    (b"flag{" * 10000, []),
+    (b"mycontestctf{custom_prefix}", ["mycontestctf{custom_prefix}"]),
+], ids=["empty-body", "max-body", "oversize-body", "newline-body", "incomplete-prefixes", "custom-prefix"])
+def test_flag_candidate_boundaries_and_incomplete_data(value, expected):
+    assert [finding["value"] for finding in flag_findings(value)] == expected
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_wide_flag_offsets_are_bytes_in_both_byte_orders(encoding):
+    prefix = b"An ASCII introduction\n"
+    value = prefix + "Clue: CTF{wide_order}".encode(encoding)
+    findings = flag_findings(value)
+    match = [finding for finding in findings if finding["value"] == "CTF{wide_order}"]
+    assert len(match) == 1
+    assert match[0]["offset"] == len(prefix) + len("Clue: ".encode(encoding))
+    assert match[0]["encoding"] == encoding
+
+
+def test_encoded_flag_records_encoded_source_offset_and_decoded_offset(tmp_path: Path):
+    token = base64.b64encode(b"Clue: flag{encoded_evidence}")
+    value = b"Encoded clue: " + token + b"\n"
+    report = analyze_job(make_job(tmp_path / "encoded", value), "quick")
+    match = next(finding for finding in report["findings"] if finding.get("value") == "flag{encoded_evidence}")
+    assert match["offset"] == value.index(token)
+    assert match["decoded_offset"] == len(b"Clue: ")
+    assert match["encoding"] == "base64"

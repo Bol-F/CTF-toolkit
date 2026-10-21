@@ -14,6 +14,8 @@ Only a fixed Python module is started, using generated paths and validated modes
 
 The worker has no networking, read-only root, unprivileged UID, dropped capabilities and no new privileges. The API publishes only loopback, validates Host headers and browser origins for mutation, caps raw request bytes including chunked transfers, and limits upload parsing concurrency. Artifact IDs resolve through reports with containment checks; opaque attachment responses prevent inline rendering. The UI uses `textContent` for evidence; CSP and frame/content-type headers protect it.
 
+The ImageMagick policy disables delegates and filters, indirect file reads, and all coders except reading supported raster formats, with memory/dimension/frame/time bounds. See [ImageMagick's policy reference](https://imagemagick.org/security-policy/). Docker's [network configuration](https://docs.docker.com/compose/how-tos/networking/) documents the worker's `none` mode.
+
 Jobs do not have separate kernel/filesystem boundaries. A decoder compromise under the shared UID could read other jobs or change evidence permissions. Read-only evidence protects against accidental changes, not that compromise. A multi-user service would need authentication and per-job containers/VMs, mounts and identities. This is a local CTF workbench, not a malware sandbox.
 
 ## Extension contract

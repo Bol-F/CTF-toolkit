@@ -82,7 +82,7 @@
 
   function route() {
     const next = location.hash.slice(1) || "analysis";
-    state.view = ["analysis", "jobs", "tools", "utilities"].includes(next) ? next : "analysis";
+    state.view = ["analysis", "jobs", "tools", "utilities", "crypto"].includes(next) ? next : "analysis";
     $$(".view").forEach(view => { view.hidden = view.id !== `view-${state.view}`; });
     $$(".nav-link").forEach(link => {
       const selected = link.hash === `#${state.view}`;
@@ -258,8 +258,9 @@
       empty(content, state.job ? isActive(state.job) ? "Following the evidence…" : "No report available" : "Your investigation starts here", state.job ? isActive(state.job) ? "Local analyzers are inspecting your file. Findings appear when the scan finishes." : "The scan ended without a report. Check its status above or try another file." : "Upload evidence to inspect findings, signatures, and extracted files.");
       return;
     }
-    const renderers = { findings: renderFindings, metadata: renderMetadata, strings: renderStrings, hex: renderHex, artifacts: renderArtifacts, report: renderRawReport };
-    renderers[state.tab](content);
+    const renderers = { findings: renderFindings, metadata: renderMetadata, strings: renderStrings, hex: renderHex, artifacts: renderArtifacts, report: renderRawReport, ...(window.StegoLabLabs?.renderers || {}) };
+    const rendered = renderers[state.tab]?.(content, {job:state.job,report:state.report});
+    if (rendered?.catch) rendered.catch(error => notify(error.message));
   }
 
   function renderFindings(content) {
@@ -499,7 +500,7 @@
       if (!tool.available && (tool.error || tool.reason)) row.append(make("p", "tool-description", tool.error || tool.reason));
       const details = make("details");
       details.append(make("summary", "", "Parameters & execution limits"));
-      details.append(codeBlock({ formats: tool.formats || tool.supported_formats, parameters: tool.parameters, limits: tool.limits || tool.execution_limits, parser: tool.parser || tool.output_parser, error_handling: tool.error_handling }));
+      details.append(codeBlock({ formats: tool.formats || tool.supported_formats, parameters: tool.parameters, limits: tool.limits || tool.execution_limits, parser: tool.parser || tool.output_parser, error_handling: tool.error_handling, license:tool.license, source:tool.source, installation:tool.installation, blocked:tool.blocked }));
       row.append(details); container.append(row);
     });
   }
@@ -555,6 +556,8 @@
   });
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", schedulePoll);
+  window.StegoLab = {context:()=>({job:state.job,report:state.report}),selectJob,
+    showTab:tab=>{state.tab=tab;renderReport();},route,notify,api};
   route();
   loadHealth();
   setInterval(loadHealth, 15000);

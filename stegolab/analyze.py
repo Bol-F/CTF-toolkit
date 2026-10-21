@@ -13,7 +13,16 @@ def main():
     parser.add_argument("mode", choices=("quick", "deep"))
     args = parser.parse_args()
     try:
-        report = analyze_job(args.job_dir, args.mode)
+        action_file = args.job_dir / 'action.json'
+        if action_file.exists():
+            from .labs.actions import run_action
+            try:
+                report = run_action(args.job_dir, json.loads(action_file.read_text()))
+            finally:
+                action_file.unlink(missing_ok=True)
+                (args.job_dir / 'supplied-wordlist.txt').unlink(missing_ok=True)
+        else:
+            report = analyze_job(args.job_dir, args.mode)
         return 0 if report["status"] == "completed" else 1
     except Exception as exc:
         # A malformed input may crash an optional decoder; supervisor also records

@@ -13,6 +13,7 @@ import signal
 import subprocess
 import threading
 import time
+import tempfile
 from pathlib import Path
 
 MAX_OUTPUT = max(1024, min(int(os.environ.get("STEGOLAB_TOOL_OUTPUT_BYTES", "1048576")), 4194304))
@@ -37,6 +38,12 @@ SPECS = {
     "zsteg": {"executables": ["zsteg"], "version_args": ["--version"], "formats": ["png", "bmp"], "parameters": ["-a"], "parser": "bit-plane detection text"},
     "steghide": {"executables": ["steghide"], "version_args": ["--version"], "formats": ["jpeg", "bmp", "wav", "au"], "parameters": ["info", "-p empty"], "parser": "embedding capacity and empty-password metadata"},
 }
+
+
+from ..labs.specialized import SPECS as LAB_SPECS
+SPECS.update(LAB_SPECS)
+SPECS['zsteg'].update(license='MIT',source='https://github.com/zed-0xff/zsteg',installation='RubyGems zsteg 0.2.13')
+SPECS['steghide'].update(license='GPL-2.0-or-later',source='https://steghide.sourceforge.net/',installation='Debian package')
 
 
 def _environment(cwd: Path) -> dict[str, str]:
@@ -139,12 +146,36 @@ def registry_snapshot() -> list[dict]:
     records = []
     for name, spec in SPECS.items():
         executable = next((shutil.which(candidate) for candidate in spec["executables"] if shutil.which(candidate)), None)
+        if spec.get('blocked'):
+            executable = None
         version = None
         if executable:
-            result = run_command([executable, *spec["version_args"]], Path.cwd(), timeout=3, max_output=8192)
-            lines = (result["stdout"] + "\n" + result["stderr"]).strip().splitlines()
-            version = next((line.strip() for line in lines if line.strip()), "version not reported")[:240]
-        records.append({"name": name, "version": version, "formats": spec["formats"], "available": bool(executable), "executable": executable, "parameters": spec["parameters"], "limits": {"timeout_seconds": TOOL_TIMEOUT, "output_bytes": MAX_OUTPUT, "shell": False}, "parser": spec["parser"], "error_handling": "Return unavailable, timeout, failed or partial with bounded diagnostics; continue remaining analyzers."})
+            try:
+                # Some CLIs initialize ~/.config even for --help. /app is read
+                # only in production, so every probe gets a temporary HOME/cwd.
+                with tempfile.TemporaryDirectory(prefix="stegolab-probe-") as directory:
+                    cwd = Path(directory)
+                    result = run_command([executable, *spec["version_args"]], cwd, timeout=3, max_output=8192)
+                    lines = (result["stdout"] + "\n" + result["stderr"]).strip().splitlines()
+                    version = next((line.strip() for line in lines if line.strip()), "version not reported")[:240]
+                    if name=='stegoveritas':
+                        interpreter=Path(executable).resolve().with_name('python')
+                        if interpreter.exists():
+                            metadata=run_command([str(interpreter),'-c',"from importlib.metadata import version;print(version('stegoveritas'))"],cwd,timeout=3,max_output=8192)
+                            if metadata['status']=='completed':version=metadata['stdout'].strip()[:240]
+                    if any(term in result['stdout']+result['stderr'] for term in ('Traceback (most recent call last)','OpenStegoException','Could not create the Java Virtual Machine')):
+                        executable=None
+                        version='Executable failed its compatibility probe'
+                    if name == "zsteg" and ("unknown" in version.lower() or version == "version not reported"):
+                        ruby = shutil.which("ruby")
+                        if ruby:
+                            gem = run_command([ruby, "-e", "puts Gem::Specification.find_by_name('zsteg').version"], cwd, timeout=3, max_output=8192)
+                            if gem["status"] == "completed" and gem["stdout"].strip():
+                                version = gem["stdout"].strip()[:240]
+            except OSError as exc:
+                version = f"Version probe unavailable: {type(exc).__name__}"
+        records.append({"name": name, "version": version, "formats": spec["formats"], "available": bool(executable), "executable": executable, "parameters": spec["parameters"], "limits": {"timeout_seconds": TOOL_TIMEOUT, "output_bytes": MAX_OUTPUT, "max_child_file_bytes": MAX_OUTPUT, "shell": False, "environment": "allowlist; no inherited application secrets", "cpu_memory": "Inherited worker CPU/address-space and Docker limits (default 768 MiB per job)"}, "parser": spec["parser"], "error_handling": "Return unavailable, timeout, failed or partial with bounded diagnostics; continue remaining analyzers."})
+        records[-1].update({key:spec[key] for key in ('license','source','installation','blocked','manual') if key in spec})
     return records
 
 

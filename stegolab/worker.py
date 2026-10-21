@@ -32,6 +32,8 @@ def kill_group(proc):
 
 
 def failure_report(job_dir, job, status, error):
+    for secret_file in ('action.json', 'supplied-wordlist.txt'):
+        (job_dir / secret_file).unlink(missing_ok=True)
     # Retain any completed analyzer results, while clearly marking partial execution.
     report = read_json(job_dir / "report.json", {})
     report.update(schema_version="1.0", job_id=job["id"], mode=job["mode"], status=status,
