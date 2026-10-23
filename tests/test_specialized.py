@@ -71,3 +71,39 @@ def test_legacy_detector_is_unavailable_even_if_on_path(tmp_path):
     report=run_action(root,{'operation':'tool_extract','tool':'stegdetect'})
     assert report['analyzers'][-1]['status']=='unavailable'
     assert not any(a['kind']=='tool_extracted' for a in report['artifacts'])
+
+
+def test_openstego_real_worker_address_limit_and_parameter_cleanup(tmp_path):
+    """The Java adapter must function inside the actual 768 MiB worker limit."""
+    import os
+    import sys
+    if sys.platform != 'linux' or not shutil.which('openstego'):
+        pytest.skip('OpenStego restricted-worker integration requires the optional Linux image')
+    from fastapi.testclient import TestClient
+    from stegolab.app import create_app
+    from stegolab.config import Settings
+    from tests.test_worker import worker, wait_for, terminal
+    raw=np.random.default_rng(12).integers(0,256,(256,256,3),dtype=np.uint8)
+    cover=tmp_path/'cover.png';Image.fromarray(raw).save(cover)
+    secret=tmp_path/'secret.txt';secret.write_bytes(SECRET)
+    stego=tmp_path/'stego.png'
+    result=run_command(['openstego','embed','-a','RandomLSB','-mf',str(secret),'-cf',str(cover),'-sf',str(stego),'-p',PASSWORD],tmp_path,timeout=15)
+    assert result['status']=='completed' and stego.exists(),result
+    settings=Settings(data_dir=tmp_path/'data',concurrency=1,memory_mb=768,deep_timeout=35)
+    with TestClient(create_app(settings)) as client:
+        parent=client.post('/api/jobs',files={'file':('stego.png',stego.read_bytes())}).json()
+        client.app.state.store.finish(parent['id'],'completed')
+        with worker(settings,tool_path=os.environ.get('PATH','')) as (_,store):
+            response=client.post(f'/api/jobs/{parent["id"]}/actions',json={'operation':'tool_extract','tool':'openstego','password':PASSWORD})
+            assert response.status_code==202,response.text
+            child=response.json()
+            job=wait_for(lambda:terminal(store,child['id']),seconds=40,description='OpenStego inside restricted worker')
+            report=client.get(f'/api/jobs/{child["id"]}/report').json()
+            diagnostics=[(settings.jobs_dir/child['id']/'artifacts'/a['path']).read_text(errors='replace')
+                         for a in report.get('artifacts',[]) if a['kind']=='tool_output']
+            assert job['status']=='completed',{'errors':report.get('errors'),'diagnostics':diagnostics}
+            assert report['analyzers'][-1]['status']=='completed',report
+            artifacts=[a for a in report['artifacts'] if a['kind']=='tool_extracted']
+            assert artifacts
+            assert SECRET in client.get(f'/api/jobs/{child["id"]}/artifacts/{artifacts[0]["id"]}').content
+            assert not (settings.jobs_dir/child['id']/'action.json').exists()

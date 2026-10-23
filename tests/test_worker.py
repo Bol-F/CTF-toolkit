@@ -152,7 +152,7 @@ def test_running_cancel_and_bounded_concurrency_preserve_originals(tmp_path: Pat
 
 
 def test_wall_or_cpu_timeout_reports_terminal_status_and_worker_survives(tmp_path: Path):
-    settings = Settings(data_dir=tmp_path / "data", concurrency=1, quick_timeout=1, memory_mb=512)
+    settings = Settings(data_dir=tmp_path / "data", concurrency=1, quick_timeout=1, deep_timeout=15, memory_mb=512)
     with worker(settings) as (_, store):
         job_id = enqueue(store, slow_evidence())
         result = wait_for(lambda: terminal(store, job_id), seconds=8, description="real analyzer timeout")
@@ -160,8 +160,10 @@ def test_wall_or_cpu_timeout_reports_terminal_status_and_worker_survives(tmp_pat
         report = read_json(settings.jobs_dir / job_id / "report.json")
         assert report["status"] == "timeout"
         assert report["errors"]
-        following = enqueue(store, b"flag{worker_still_operates}")
-        result = wait_for(lambda: terminal(store, following), seconds=8, description="scan after timeout")
+        # Give the recovery assertion its own ordinary budget: a 1s deadline
+        # measures interpreter startup under CI contention rather than recovery.
+        following = enqueue(store, b"flag{worker_still_operates}", mode="deep")
+        result = wait_for(lambda: terminal(store, following), seconds=18, description="scan after timeout")
         assert result["status"] == "completed", result
 
 

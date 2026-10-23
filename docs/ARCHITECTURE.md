@@ -1,6 +1,6 @@
 # Architecture and security
 
-The initial repository had only a README. FastAPI and static browser assets keep setup small, while separate Compose services isolate HTTP handling from untrusted parsing. Runtime state and processing stay local.
+FastAPI and static browser assets keep setup small, while separate Compose services isolate HTTP handling from untrusted parsing. The release extends the existing queue, analyzers and browser labs. Runtime state and processing stay local.
 
 ## Lifecycle and execution
 
@@ -31,3 +31,11 @@ Add a function/method returning the envelope and register it in the engine pipel
 Archive paths are validated under POSIX/Windows conventions but used only as display labels. Members stream to generated artifact names; archive `extract`/`extractall` are never used. Reject traversal, absolute/drive/NUL paths, links, devices, sparse TAR members and encrypted ZIPs. Shared byte/member/depth/count/ratio/inspection quotas apply across recursion. Verify actual streamed bytes, not just declared sizes. Remove partial failures while counting their work against the processing budget.
 
 The admission ledger reserves maximum upload size plus 80 MiB per retained job. This is not an OS volume quota: generation/extraction, report previews and transient output are separately bounded. Physical free disk is still necessary. Explicit retention avoids silently destroying evidence.
+
+## Interactive operations and report exports
+
+`stegolab/labs/` supplies image inspection/LSB extraction, audio PCM/STFT analysis, validated structure regions, central flags, bounded crypto recipes and explicitly selected steganography adapters. An explicit action copies the chosen evidence into a child job and uses the same restricted supervisor; it does not run native tools in the HTTP process. Private action parameters are removed at terminal cleanup. Active children prevent deletion of their source investigation.
+
+Generated PNG/PCM artifacts carry a preview marker and are the only types allowed inline; original and extracted evidence remain attachments. Byte viewing pages bounded reads by artifact ID. Browser-only visual filters operate on sanitized previews; native LSB extraction reads the bounded original pixels.
+
+`stegolab/reporting.py` normalizes candidates from existing/new reports and produces escaped Markdown. Exports record hashes, tool inventory, operation statuses, candidates, artifact IDs and source-relative offsets. JSON remains the lossless structured report; Markdown is a readable summary and never embeds executable raw metadata markup.

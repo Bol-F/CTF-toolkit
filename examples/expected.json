@@ -1,0 +1,34 @@
+{
+  "lsb.png": {
+    "flags": [
+      "flag{example_rgb_lsb}"
+    ],
+    "operation": "RGB channels, bit 0, row order, MSB byte packing",
+    "sha256": "d5c8b3b50f620910e6108cf2d1195f198921600194a36fb4849cde34f3d7c3ac"
+  },
+  "metadata.png": {
+    "flags": [
+      "flag{example_metadata}"
+    ],
+    "operation": "metadata/text chunk inspection",
+    "sha256": "01eede334744e71a34f4a148665d64b4a546ff502063be191a4e39eadba8b1a2"
+  },
+  "appended.png": {
+    "flags": [
+      "flag{example_appended_zip}",
+      "CTF{example_nested_archive}"
+    ],
+    "operation": "Deep Scan: appended ZIP and nested ZIP extraction",
+    "sha256": "ddedc7e1c3f0abd1f9f94055610a2b42d7619116e18e990d42859bad3ce804bc"
+  },
+  "encoded.txt": {
+    "flags": [
+      "picoCTF{example_two_stage_decode}"
+    ],
+    "recipe": [
+      "base64_decode",
+      "base32_decode"
+    ],
+    "sha256": "da0dde7c456f984a6dcfd6e66d63d91915096a053c70ad6b8cc6101652e21f6f"
+  }
+}

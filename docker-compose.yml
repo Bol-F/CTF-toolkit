@@ -25,7 +25,7 @@ services:
   web:
     <<: *common
     ports:
-      - "127.0.0.1:${STEGOLAB_PORT:-8000}:8000"
+      - "127.0.0.1:${STEGOLAB_PORT:-8080}:8000"
     mem_limit: 384m
     cpus: 1
     pids_limit: 96

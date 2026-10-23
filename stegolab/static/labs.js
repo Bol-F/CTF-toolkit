@@ -26,9 +26,10 @@
   }
   async function watch(job,out,open=false){
     const started=Date.now();
+    const progress=node('span','Waiting for the local worker…'),cancel=button('Cancel task',async()=>{try{await host.api(`/api/jobs/${job.id}/cancel`,{method:'POST'});cancel.disabled=true;cancel.textContent='Cancellation requested';}catch(error){progress.textContent=error.message;}});out.replaceChildren(progress,cancel);
     while(Date.now()-started<330000){
       const current=await host.api(`/api/jobs/${job.id}`);
-      out.textContent=`${current.status} · ${current.stage} · ${Math.round(current.progress)}%`;
+      progress.textContent=`${current.status} · ${current.stage} · ${Math.round(current.progress)}% `;
       if(['completed','failed','timeout','cancelled'].includes(current.status)){
         let report;try{report=await host.api(`/api/jobs/${job.id}/report`);}catch{throw new Error(current.error||'No action report available');}
         if(current.status!=='completed')throw new Error((report.errors||[current.error||current.status]).join('\n'));
@@ -53,7 +54,7 @@
     const plane=field(bar,'Bit plane',select([['all','All bits'],...Array.from({length:8},(_,i)=>[String(i),`Bit ${i}`])],'all'));
     const brightness=field(bar,'Brightness',input(0,'range'));brightness.min=-128;brightness.max=128;
     const contrast=field(bar,'Contrast',input(1,'range'));contrast.min=0;contrast.max=4;contrast.step=.05;
-    const gamma=field(bar,'Gamma',input(1,'range'));gamma.min=.1;gamma.max=4;gamma.step=.05;
+    const gamma=field(bar,'Gamma',input(1,'range'));gamma.min=.1;gamma.max=4;gamma.step=.05;gamma.value='1';
     const imageZoom=field(bar,'Preview zoom',select([['1','1×'],['2','2×'],['4','4×'],['8','8×']],'1'));
     const invert=field(bar,'Invert',input('','checkbox'));invert.parentElement.className='check';
     const panels=node('div',undefined,'lab-panels');root.append(panels);
@@ -104,11 +105,12 @@
       byteOrder=field(lsb,'Pack bytes',select([['msb','First bit is MSB'],['lsb','First bit is LSB']])),direction=field(lsb,'Traversal',select([['row','Rows (left → right)'],['column','Columns (top → bottom)']])),
       frame=field(lsb,'Frame index',input(0,'number')),skip=field(lsb,'Skip bits',input(0,'number')),limit=field(lsb,'Output byte limit',input(65536,'number')),
       reverse=field(lsb,'Reverse pixel traversal',input('','checkbox'));reverse.parentElement.className='check';
+    [skip,limit,reverse].forEach(control=>control.parentElement.classList.add('advanced-only'));
     const lsbOut=status(root);root.append(button('Extract LSB data',catchError(lsbOut,async()=>{
       const result=await task(context,{operation:'image_lsb',channels:order.value.toUpperCase(),bits:bits.value.split(/[,\s]+/).filter(Boolean).map(Number),bit_order:byteOrder.value,direction:direction.value,reverse:reverse.checked,frame:Number(frame.value),skip_bits:Number(skip.value),max_bytes:Number(limit.value)},lsbOut);
       if(result){const detail=getStage(result.report,'image_lsb');root.append(code(detail));result.report.artifacts.forEach(a=>download(root,`Download ${a.name}`,artifactURL(result.job,a.id)));}
     })));
-    heading(root,'Channel statistics and metadata');root.append(code({channels:data.channels,metadata:data.metadata}));
+    const technical=node('details',undefined,'advanced-only');technical.append(node('summary','Channel statistics and metadata'),code({channels:data.channels,metadata:data.metadata}));root.append(technical);
   }
 
   async function forensicsLab(root,context){
@@ -129,7 +131,8 @@
       out.textContent=`${data.source} · ${data.size} bytes · showing ${cursor}–${Math.max(cursor,cursor+data.bytes.length-1)}`;
     }
     bar.append(button('Go',catchError(out,()=>fetchBytes(Number(offset.value)))),button('Previous',catchError(out,()=>fetchBytes(cursor-512))),button('Next',catchError(out,()=>fetchBytes(Math.min(Math.max(0,size-1),cursor+512)))));
-    source.addEventListener('change',catchError(out,()=>fetchBytes(0)));await fetchBytes(0);
+    if(context.byteSelection?.artifact_id)source.value=context.byteSelection.artifact_id;
+    source.addEventListener('change',catchError(out,()=>fetchBytes(0)));await fetchBytes(context.byteSelection?.offset||0);
     heading(root,'Structure and embedded regions');help(root,'Click a region to jump to its bytes. Confirmed labels require container validation; signature candidates remain unconfirmed.');
     const structure=node('canvas',undefined,'entropy-canvas');structure.width=1000;structure.height=50;structure.style.height='50px';structure.setAttribute('aria-label','File structure byte regions');root.append(structure);
     const structureContext=structure.getContext('2d');const mapped=[...(data.regions||[]),...(data.embedded||[])];
@@ -161,12 +164,18 @@
     const wave=node('canvas',undefined,'waveform-canvas');wave.width=1000;wave.height=150;root.append(wave);
     const spectroWrap=node('div',undefined,'spectrogram-wrap'),spectro=node('canvas');spectroWrap.append(spectro);root.append(spectroWrap);
     const out=status(root),frequency=node('canvas',undefined,'spectrum-canvas');frequency.width=1000;frequency.height=150;root.append(frequency);
+    const selectionBar=controls(root),lowFrequency=field(selectionBar,'Frequency start (Hz)',input(0,'number')),highFrequency=field(selectionBar,'Frequency end (Hz)',input(data.sample_rate/2,'number')),selectionStatus=status(root);
+    lowFrequency.min=highFrequency.min=0;lowFrequency.max=highFrequency.max=data.sample_rate/2;lowFrequency.step=highFrequency.step=data.sample_rate/1024;
+    function selection(){const low=Math.max(0,Math.min(data.sample_rate/2,Number(lowFrequency.value)||0)),high=Math.max(low,Math.min(data.sample_rate/2,Number(highFrequency.value)||0));return{low,high};}
+    function drawSelection(){const selected=data.channel_data.find(c=>String(c.channel)===channel.value),range=selection(),values=selected.mean_magnitude,max=Math.max(...values,1e-8),fctx=frequency.getContext('2d');fctx.clearRect(0,0,1000,150);fctx.fillStyle='#8ee0b322';fctx.fillRect(range.low/(data.sample_rate/2)*1000,0,(range.high-range.low)/(data.sample_rate/2)*1000,150);fctx.strokeStyle='#8ee0b3';fctx.beginPath();let peak=-1,peakValue=-1;values.forEach((value,i,array)=>{const hz=i*data.sample_rate/1024,x=i*1000/array.length,y=145-value/max*140;i?fctx.lineTo(x,y):fctx.moveTo(x,y);if(hz>=range.low&&hz<=range.high&&value>peakValue){peak=i;peakValue=value;}});fctx.stroke();selectionStatus.textContent=`Selected band ${range.low.toFixed(1)}–${range.high.toFixed(1)} Hz · ${peak<0?'no FFT bins in selected band':`strongest bin ${(peak*data.sample_rate/1024).toFixed(1)} Hz, magnitude ${peakValue.toFixed(5)}`} · click frequency spectrum to select one bin. Selection inspects decoded data; playback remains unchanged.`;}
+    lowFrequency.oninput=highFrequency.oninput=drawSelection;frequency.onclick=event=>{const hz=Math.max(0,Math.min(data.sample_rate/2,(event.clientX-frequency.getBoundingClientRect().left)/frequency.clientWidth*data.sample_rate/2)),bin=data.sample_rate/1024;lowFrequency.value=Math.max(0,hz-bin/2).toFixed(2);highFrequency.value=Math.min(data.sample_rate/2,hz+bin/2).toFixed(2);drawSelection();};
     let image;
     async function draw(){const selected=data.channel_data.find(c=>String(c.channel)===channel.value);player.src=preview(context.job,selected.playback_artifact_id);image=await loadImage(preview(context.job,selected.spectrogram_artifact_id));
       const wctx=wave.getContext('2d');wctx.clearRect(0,0,1000,150);wctx.strokeStyle='#c5f17c';wctx.beginPath();selected.waveform.forEach(([low,high],i,array)=>{const x=i*1000/array.length;wctx.moveTo(x,75-low*70);wctx.lineTo(x,75-high*70);});wctx.stroke();
       spectro.width=Math.max(image.naturalWidth,spectroWrap.clientWidth)*Number(zoom.value);spectro.height=300;spectro.getContext('2d').drawImage(image,0,0,spectro.width,300);
       const fctx=frequency.getContext('2d');fctx.clearRect(0,0,1000,150);fctx.strokeStyle='#65d6b7';fctx.beginPath();const max=Math.max(...selected.mean_magnitude,1e-8);selected.mean_magnitude.forEach((value,i,array)=>{const x=i*1000/array.length,y=145-value/max*140;i?fctx.lineTo(x,y):fctx.moveTo(x,y);});fctx.stroke();
       out.textContent=`Mean frequency spectrum · 0–${data.sample_rate/2} Hz · peak ${selected.peak_frequency_hz} Hz · RMS ${selected.rms}\nClick waveform/spectrogram to seek. Hover spectrogram for time/frequency.`;
+      drawSelection();
     }
     channel.onchange=()=>draw().catch(error=>{out.textContent=error.message;});zoom.onchange=()=>{if(image){spectro.width=Math.max(image.naturalWidth,spectroWrap.clientWidth)*Number(zoom.value);spectro.getContext('2d').drawImage(image,0,0,spectro.width,300);}};
     wave.onclick=event=>{player.currentTime=Math.max(0,(event.clientX-wave.getBoundingClientRect().left)/wave.clientWidth*data.duration);};
@@ -184,7 +193,7 @@
     function show(report){results.replaceChildren();const entries=report.flag_candidates||report.analyzers.find(a=>a.name==='central_flags')?.findings||[];
       if(!entries.length)results.append(node('p','No configured pattern matches in the bounded scan.'));
       entries.forEach(candidate=>{const card=node('article',undefined,'lab-card');const top=node('strong',candidate.value||candidate.candidate_value||candidate.detail);top.append(node('span',candidate.classification||'candidate',`flag-badge ${candidate.classification?.includes('heuristic')?'heuristic':''}`));
-        card.append(top,code({source_file:candidate.source_file||candidate.source,offset:candidate.offset,method:candidate.method,history:candidate.history,evidence:candidate.evidence}));results.append(card);
+        card.append(top,code({source_file:candidate.source_file||candidate.source,offset:candidate.byte_offset??candidate.offset,method:candidate.method,history:candidate.transformation_history||candidate.history,evidence:candidate.evidence}));results.append(card);
       });
     }
     bar.append(button('Scan all retained sources',catchError(out,async()=>{const result=await task(context,{operation:'flag_scan',prefixes:prefixes.value.split(',').map(x=>x.trim()).filter(Boolean),expression:expression.value},out);if(result)show(result.report);})));show(context.report);
@@ -198,12 +207,13 @@
     const bar=controls(root),tool=field(bar,'Adapter',select(names.map(name=>{const entry=registry.find(t=>t.name===name);return[name,`${name} · ${entry?.available?'installed':'unavailable'}`];}))),password=field(bar,'Password',input('','password'));
     const dictionary=node('textarea');dictionary.rows=4;dictionary.placeholder='StegSeek only: one supplied password candidate per line (at most 1,000).';dictionary.setAttribute('aria-label','Supplied password candidates');root.append(dictionary);
     const details=node('div'),out=status(root);root.append(details);
-    function describe(){const info=registry.find(x=>x.name===tool.value);details.replaceChildren(code({name:info?.name,available:info?.available,version:info?.version,license:info?.license,installation:info?.installation,source:info?.source,blocked:info?.blocked,formats:info?.formats}));}
-    tool.onchange=describe;describe();bar.append(button('Run explicit tool task',catchError(out,async()=>{const result=await task(context,{operation:'tool_extract',tool:tool.value,password:password.value,passwords:dictionary.value.split('\n').filter(Boolean)},out,{open:true});password.value='';dictionary.value='';return result;})));
+    const run=button('Run explicit tool task',catchError(out,async()=>{const result=await task(context,{operation:'tool_extract',tool:tool.value,password:password.value,passwords:dictionary.value.split('\n').filter(Boolean)},out,{open:true});password.value='';dictionary.value='';return result;}));
+    function describe(){const info=registry.find(x=>x.name===tool.value);details.replaceChildren(code({name:info?.name,available:info?.available,version:info?.version,license:info?.license,installation:info?.installation,source:info?.source,blocked:info?.blocked,formats:info?.formats}));run.disabled=!info?.available;run.title=info?.available?'Run the installed adapter on this uploaded evidence':info?.blocked||'This tool is unavailable in the current worker image.';}
+    tool.onchange=describe;describe();bar.append(run);
     if(context.report.file.format==='pdf'){heading(root,'Extract PDF attachment');const pdfbar=controls(root),number=field(pdfbar,'Attachment number',input(1,'number'));pdfbar.append(button('Extract attachment',catchError(out,()=>task(context,{operation:'pdf_extract',attachment:Number(number.value)},out,{open:true}))));}
   }
 
-  window.StegoLabLabs={renderers:{image:imageLab,forensics:forensicsLab,audio:audioLab,flags:flagLab,specialized:specializedLab}};
+  window.StegoLabLabs={renderers:{image:imageLab,hex:forensicsLab,forensics:forensicsLab,audio:audioLab,flags:flagLab,specialized:specializedLab}};
   const tablist=document.querySelector('.tabs');
   [['image','Image lab'],['audio','Audio lab'],['forensics','Forensics'],['flags','Flag Finder'],['specialized','Stego tools']].forEach(([id,title])=>{
     const tab=button(title,()=>host.showTab(id),'');tab.id=`tab-${id}`;tab.dataset.tab=id;tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.setAttribute('aria-controls','result-content');tab.tabIndex=-1;tablist.append(tab);
@@ -215,13 +225,25 @@
   const inputBar=controls(panel),encoding=field(inputBar,'Input representation',select([['utf8','UTF-8 text'],['hex','Hexadecimal bytes'],['base64','Base64 bytes']]));
   const text=node('textarea');text.rows=6;text.setAttribute('aria-label','Recipe input');text.placeholder='Text, hexadecimal or Base64 input…';panel.append(text);
   const stepRows=node('div');panel.append(stepRows);const actions=node('div',undefined,'lab-actions');panel.append(actions);const out=status(panel),results=node('div',undefined,'lab-recipe-results');panel.append(results);
+  const historyBar=node('div',undefined,'recipe-history-actions');panel.insertBefore(historyBar,inputBar);
+  const upload=node('input');upload.type='file';upload.setAttribute('aria-label','Upload recipe bytes');upload.className='sr-only';const uploadLabel=node('label','64 KiB maximum');uploadLabel.append(upload);
+  const history=[];let historyIndex=-1,restoring=false;
+  const snapshot=()=>({input:text.value,encoding:encoding.value,steps:Array.from(stepRows.children).map(row=>({operation:row.querySelector('select').value,key:row.querySelector('input').value,shift:row.querySelectorAll('input')[1].value}))});
+  function remember(){if(restoring)return;const current=JSON.stringify(snapshot());if(history[historyIndex]===current)return;history.splice(historyIndex+1);history.push(current);if(history.length>100)history.shift();historyIndex=history.length-1;updateHistory();}
+  const undo=button('Undo',()=>restore(historyIndex-1)),redo=button('Redo',()=>restore(historyIndex+1));historyBar.append(undo,redo,button('Upload bytes',()=>upload.click()),uploadLabel);
+  function updateHistory(){undo.disabled=historyIndex<=0;redo.disabled=historyIndex>=history.length-1;}
+  function restore(index){if(index<0||index>=history.length)return;restoring=true;const saved=JSON.parse(history[index]);text.value=saved.input;encoding.value=saved.encoding;stepRows.replaceChildren();saved.steps.forEach(step=>{const row=addStep(step.operation);row.querySelector('input').value=step.key;row.querySelectorAll('input')[1].value=step.shift;});historyIndex=index;restoring=false;updateHistory();}
+  text.addEventListener('change',remember);encoding.addEventListener('change',remember);stepRows.addEventListener('change',remember);
+  upload.onchange=async()=>{try{const file=upload.files[0];if(!file)return;if(file.size>65536)throw new Error('Recipe input is limited to 64 KiB.');const bytes=new Uint8Array(await file.arrayBuffer());let binary='';bytes.forEach(value=>{binary+=String.fromCharCode(value);});text.value=btoa(binary);encoding.value='base64';remember();out.textContent=`Loaded ${file.name} · ${bytes.length} bytes as Base64 representation.`;}catch(error){out.textContent=error.message;}};
+  panel.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(event.target.tagName)){event.preventDefault();restore(historyIndex+(event.shiftKey?1:-1));}});
   let operations=[];
   host.api('/api/recipes/operations').then(data=>{operations=data.operations;addStep('base64_decode');}).catch(error=>{out.textContent=error.message;});
   function addStep(operation='base64_decode'){
     if(stepRows.children.length>=20)return;
-    const row=node('div',undefined,'lab-recipe-row'),op=select(operations,operation),key=input(''),shift=input(13,'number');key.placeholder='Key (XOR: hex; Vigenere: letters)';op.setAttribute('aria-label','Recipe step operation');key.setAttribute('aria-label','Recipe step key');shift.setAttribute('aria-label','Caesar shift');
-    const adjust=node('div',undefined,'recipe-step-actions');adjust.append(button('Up',()=>{if(row.previousElementSibling)stepRows.insertBefore(row,row.previousElementSibling);}),button('Down',()=>{if(row.nextElementSibling)stepRows.insertBefore(row.nextElementSibling,row);}),button('Remove',()=>row.remove()));
-    row.append(op,key,shift,adjust);stepRows.append(row);
+    const row=node('div',undefined,'lab-recipe-row'),op=select(operations.map(id=>[id,id.replaceAll('_',' ')]),operation),key=input(''),shift=input(13,'number');op.setAttribute('aria-label','Recipe step operation');key.setAttribute('aria-label','Recipe step key');shift.setAttribute('aria-label','Caesar shift');
+    const adjustParameters=()=>{key.disabled=!/xor|vigenere/.test(op.value);shift.disabled=!/caesar/.test(op.value);key.placeholder=key.disabled?'No key required':op.value.includes('xor')?'XOR key as hexadecimal bytes':'Vigenère key (letters)';shift.title=shift.disabled?'Shift applies to Caesar operations':'Caesar shift';};op.addEventListener('change',adjustParameters);adjustParameters();
+    const adjust=node('div',undefined,'recipe-step-actions');adjust.append(button('Up',()=>{if(row.previousElementSibling)stepRows.insertBefore(row,row.previousElementSibling);remember();}),button('Down',()=>{if(row.nextElementSibling)stepRows.insertBefore(row.nextElementSibling,row);remember();}),button('Remove',()=>{row.remove();remember();}));
+    row.append(op,key,shift,adjust);stepRows.append(row);remember();return row;
   }
   actions.append(button('Add step',()=>addStep()),button('Run recipe',catchError(out,async()=>{
     results.replaceChildren();const steps=Array.from(stepRows.children).map(row=>({operation:row.querySelector('select').value,key:row.querySelector('input').value,shift:Number(row.querySelectorAll('input')[1].value)}));
@@ -230,7 +252,7 @@
     if(recipe.details_artifact_id)recipe=await fetch(artifactURL(result.job,recipe.details_artifact_id)).then(response=>response.json());
     recipe.steps.forEach(step=>{const details=node('details');details.open=true;details.append(node('summary',`${step.step}. ${step.operation} · ${step.size} bytes`),code(step.text??step.hex));results.append(details);});
     heading(results,'Final output');results.append(code(recipe.output.text??recipe.output.hex));
-    result.report.artifacts.forEach(a=>download(results,'Download final bytes',artifactURL(result.job,a.id)));if(recipe.flags.length){heading(results,'Flag matches');recipe.flags.forEach(f=>results.append(code(f)));}
+    result.report.artifacts.forEach(a=>download(results,a.name==='recipe-output.bin'?'Download final bytes':`Download ${a.name}`,artifactURL(result.job,a.id)));if(recipe.flags.length){heading(results,'Flag matches');recipe.flags.forEach(f=>results.append(code(f)));}
   }),'button primary'));
   host.route();
 })();

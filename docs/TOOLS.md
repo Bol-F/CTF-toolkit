@@ -15,7 +15,7 @@ Core installation remains independent of legacy tools. `docker-compose.tools.yml
 
 The inventory is runtime evidence, not a promise: missing tools are unavailable, failed compatibility probes are reported, and adapters return actual execution statuses. Version probes sometimes require metadata fallbacks because older CLIs print only help. An installed executable is only considered a verified integration after a real fixture test; the test target contains supplied-password round trips for steghide, StegSeek, OutGuess, OpenStego and StegSnow, plus metadata-only StegoVeritas. Tests explicitly skip optional tools absent from the core image.
 
-Upstream OpenStego/StegSeek release downloads are SHA-256 pinned in `config/install-specialized.py`. Debian packages and Python dependencies still need a build-time network connection. The optional image is larger and builds more slowly; rebuilding source edits reuses dependency stages. Preserve upstream notices and review the full installed license texts before redistributing images.
+Upstream OpenStego/StegSeek release downloads and matching source archives are SHA-256 pinned in `config/install-specialized.py` and retained in the optional image. Debian packages and Python dependencies still need a build-time network connection. The optional image is larger and builds more slowly; rebuilding source edits reuses dependency stages. Full installed notices and package/source-version inventories are retained; see [third-party notices](../THIRD_PARTY_NOTICES.md) and [corresponding-source release instructions](RELEASING.md) before redistributing images. OpenStego's launcher bounds Java reserves; its tests include extraction through the real worker's 768 MiB address-space limit.
 
 Test optional integration:
 

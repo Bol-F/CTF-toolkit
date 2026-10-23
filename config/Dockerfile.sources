@@ -1,0 +1,9 @@
+# Release helper only; normal local deployment does not download source bundles.
+# IMAGE must name the exact locally built image being redistributed.
+ARG IMAGE=stegolab:local
+FROM ${IMAGE} AS source-collector
+USER root
+COPY config/collect-debian-sources.py /tmp/collect-debian-sources.py
+RUN python /tmp/collect-debian-sources.py
+FROM scratch AS source-bundle
+COPY --from=source-collector /release-sources/ /

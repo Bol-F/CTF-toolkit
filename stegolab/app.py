@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -20,6 +20,7 @@ from . import __version__
 from .config import Settings
 from .store import CapacityError, Store, TERMINAL, atomic_json, read_json
 from .utilities import transform
+from .reporting import markdown_report
 
 
 class BodyTooLarge(Exception):
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None):
     async def lifespan(app):
         app.state.store = Store(settings)
         app.state.store.recover_uploads()
+        app.state.store.index_missing_reports()
         for record in app.state.store.list(settings.max_jobs):
             if record['status'] in TERMINAL:
                 (settings.jobs_dir/record['id']/'action.json').unlink(missing_ok=True)
@@ -203,10 +205,16 @@ def create_app(settings: Settings | None = None):
     def lab_action(job_id:str, data:LabAction):
         path,filename,_ = source_file(job_id,data.artifact_id)
         options = data.model_dump(exclude={'artifact_id'})
+        if data.artifact_id:
+            options['source_artifact_id'] = data.artifact_id
         if any(len(p.encode())>256 or '\n' in p or '\x00' in p for p in data.passwords):
             raise HTTPException(422,'Password candidates must contain at most 256 bytes and no NUL/newline')
         if '\x00' in data.password: raise HTTPException(422,'Password cannot contain NUL')
-        return enqueue_action(path.read_bytes(),filename,options,parent_id=job_id)
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise HTTPException(409, 'Source investigation was deleted; refresh the investigation list') from exc
+        return enqueue_action(content,filename,options,parent_id=job_id)
 
     @app.post('/api/recipes',status_code=202)
     def recipe(data:RecipeInput):
@@ -254,6 +262,12 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/jobs")
     def jobs(limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0)):
         return {"jobs": [public_job(j) for j in store().list(limit, offset)]}
+
+    @app.get('/api/flags')
+    def flags(query: str = Query('', max_length=256),
+              classification: Literal['all', 'confirmed_pattern_match', 'heuristic_candidate'] = 'all',
+              limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0)):
+        return store().flags(query, classification, limit, offset)
 
     @app.post("/api/jobs", status_code=202)
     async def upload(request: Request):
@@ -309,16 +323,14 @@ def create_app(settings: Settings | None = None):
 
     @app.delete("/api/jobs/{job_id}", status_code=204)
     def delete(job_id: str):
-        record = get_job(job_id)
-        if record["status"] not in TERMINAL:
-            raise HTTPException(409, "Cancel the active job and wait for it to finish before deleting")
-        if store().active_children(job_id):
-            raise HTTPException(409,'This evidence is referenced by an active lab action; finish or cancel it first')
-        shutil.rmtree(settings.jobs_dir / job_id)
-        store().delete(job_id)
+        get_job(job_id)
+        try:
+            store().delete_finished(job_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}/report")
-    def report(job_id: str, download: bool = False):
+    def report(job_id: str, download: bool = False, format: Literal['json', 'markdown'] = 'json'):
         record = get_job(job_id)
         if record["status"] not in TERMINAL:
             raise HTTPException(409, "Report is not ready")
@@ -326,6 +338,9 @@ def create_app(settings: Settings | None = None):
         data = read_json(path)
         if data is None:
             raise HTTPException(404, "No report was generated")
+        if format == 'markdown':
+            headers = {'Content-Disposition': f'attachment; filename="stegolab-{job_id}.md"'} if download else {}
+            return Response(markdown_report(data, record), media_type='text/markdown', headers=headers)
         if download:
             return FileResponse(path, media_type="application/json", filename=f"stegolab-{job_id}.json")
         return data

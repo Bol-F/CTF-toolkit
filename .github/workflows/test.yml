@@ -1,16 +1,51 @@
 name: Tests
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      optional_tools:
+        description: Build and test the optional specialized worker
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   docker-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check buildless frontend syntax
+        run: for source in stegolab/static/*.js; do node --check "$source"; done
       - name: Validate Compose
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.tools.yml config --quiet
       - name: Build test image
         run: docker build --target test -t stegolab-tests .
       - name: Run tests without networking or privileges
         run: docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=512m stegolab-tests
+      - name: Start default deployment
+        run: docker compose up -d --build --wait --wait-timeout 120
+      - name: Verify live API and known-answer examples
+        run: python config/release-smoke.py
+      - name: Show failure diagnostics
+        if: failure()
+        run: docker compose logs --tail=100 web worker
+      - name: Stop test deployment
+        if: always()
+        run: docker compose down
+  optional-tools:
+    if: github.event_name == 'workflow_dispatch' && inputs.optional_tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build optional test image
+        run: docker build --target tools-test -t stegolab-tools-tests .
+      - name: Test optional programs without networking or privileges
+        run: docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=512m stegolab-tools-tests

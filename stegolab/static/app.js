@@ -81,9 +81,10 @@
   }
 
   function route() {
-    const next = location.hash.slice(1) || "analysis";
-    state.view = ["analysis", "jobs", "tools", "utilities", "crypto"].includes(next) ? next : "analysis";
-    $$(".view").forEach(view => { view.hidden = view.id !== `view-${state.view}`; });
+    const next = location.hash.slice(1) || "dashboard";
+    state.view = ["dashboard", "analysis", "studio", "audio", "flags", "reports", "jobs", "tools", "utilities", "crypto"].includes(next) ? next : "dashboard";
+    const surface = ["studio", "audio"].includes(state.view) ? "analysis" : state.view;
+    $$(".view").forEach(view => { view.hidden = view.id !== `view-${surface}`; });
     $$(".nav-link").forEach(link => {
       const selected = link.hash === `#${state.view}`;
       link.classList.toggle("active", selected);
@@ -92,6 +93,7 @@
     $("#page-title").textContent = state.view[0].toUpperCase() + state.view.slice(1);
     if (state.view === "jobs") loadJobs().catch(error => notify(error.message));
     if (state.view === "tools") loadTools().catch(error => notify(error.message));
+    window.dispatchEvent(new CustomEvent("stegolab:route", {detail:state.view}));
     schedulePoll();
   }
 
@@ -121,6 +123,8 @@
       await loadJobs();
       await loadReport();
       schedulePoll();
+      localStorage.setItem("stegolab.lastJob", state.job.id);
+      return state.job;
     } catch (error) { notify(error.message); }
     finally {
       state.uploading = false;
@@ -130,6 +134,24 @@
       $("#upload-description").textContent = "Images, audio, archives, documents, and binary files";
       $("#file-input").value = "";
     }
+  }
+
+  async function uploadFiles(files) {
+    if (state.uploading || state.batchUploading) return;
+    state.batchUploading = true;
+    location.hash = "analysis";
+    const batch = Array.from(files || []);
+    const accepted = [], rejected = [];
+    for (let i = 0; i < batch.length; i++) {
+      const queue = $("#upload-queue");
+      if (queue) queue.textContent = batch.length > 1 ? `Uploading ${i + 1} of ${batch.length}: ${batch[i].name}` : "";
+      const job = await upload(batch[i]);
+      if (job) accepted.push(job); else rejected.push(`${batch[i].name}: ${$("#notification").textContent || "Upload was rejected"}`);
+    }
+    state.batchUploading = false;
+    const queue = $("#upload-queue");
+    if (queue) queue.textContent = `${accepted.length} file${accepted.length === 1 ? "" : "s"} submitted${rejected.length ? ` · ${rejected.length} rejected` : ""}. Each accepted file has its own investigation in History.`;
+    if (rejected.length) notify(rejected.join("\n"));
   }
 
   function renderProgress() {
@@ -180,6 +202,7 @@
     state.reportLoaded = false;
     state.query = "";
     state.tab = "findings";
+    localStorage.setItem("stegolab.lastJob", job.id);
     location.hash = "analysis";
     renderProgress();
     renderReport();
@@ -189,12 +212,14 @@
 
   async function refreshJob() {
     if (!state.job) return;
+    const wasActive = isActive(state.job);
     const id = state.selectedId;
     const result = await api(`/api/jobs/${encodeURIComponent(id)}`);
     if (id !== state.selectedId) return;
     state.job = result.job || result;
     renderProgress();
     await loadReport();
+    if (wasActive && !isActive(state.job)) await loadJobs();
   }
 
   function schedulePoll() {
@@ -234,6 +259,7 @@
       tab.tabIndex = active ? 0 : -1;
     });
     const report = state.report;
+    if (report && !isActive(state.job)) $("#job-progress").hidden = true;
     const summary = $("#evidence-summary");
     summary.replaceChildren();
     summary.hidden = !report?.file;
@@ -254,12 +280,14 @@
     const download = $("#report-download");
     download.hidden = !report;
     if (report) download.href = `/api/jobs/${encodeURIComponent(state.job.id)}/report?download=1`;
+    window.dispatchEvent(new CustomEvent("stegolab:evidence"));
     if (!report) {
       empty(content, state.job ? isActive(state.job) ? "Following the evidence…" : "No report available" : "Your investigation starts here", state.job ? isActive(state.job) ? "Local analyzers are inspecting your file. Findings appear when the scan finishes." : "The scan ended without a report. Check its status above or try another file." : "Upload evidence to inspect findings, signatures, and extracted files.");
       return;
     }
     const renderers = { findings: renderFindings, metadata: renderMetadata, strings: renderStrings, hex: renderHex, artifacts: renderArtifacts, report: renderRawReport, ...(window.StegoLabLabs?.renderers || {}) };
-    const rendered = renderers[state.tab]?.(content, {job:state.job,report:state.report});
+    const rendered = renderers[state.tab]?.(content, {job:state.job,report:state.report,byteSelection:state.byteSelection});
+    state.byteSelection = null;
     if (rendered?.catch) rendered.catch(error => notify(error.message));
   }
 
@@ -447,6 +475,7 @@
   async function loadJobs() {
     const data = await api("/api/jobs");
     state.jobs = Array.isArray(data) ? data : data.jobs || [];
+    window.dispatchEvent(new CustomEvent("stegolab:jobs"));
     const count = $("#job-count"); count.textContent = state.jobs.length; count.hidden = !state.jobs.length;
     const container = $("#jobs-list"); container.replaceChildren();
     if (!state.jobs.length) { empty(container, "No investigations yet", "Upload your first evidence file from Analysis to start a local scan."); return; }
@@ -486,6 +515,7 @@
   async function loadTools() {
     const data = await api("/api/tools");
     state.tools = Array.isArray(data) ? data : data.tools || [];
+    window.dispatchEvent(new CustomEvent("stegolab:tools"));
     const available = state.tools.filter(tool => tool.available).length;
     $("#tools-summary").textContent = `${available} available · ${state.tools.length - available} unavailable · unavailable optional tools are skipped`;
     const container = $("#tools-list"); container.replaceChildren();
@@ -526,13 +556,13 @@
   }
 
   $("#choose-file").addEventListener("click", () => $("#file-input").click());
-  $("#file-input").addEventListener("change", event => upload(event.target.files[0]));
+  $("#file-input").multiple = true;
+  $("#file-input").addEventListener("change", event => uploadFiles(event.target.files));
   const dropZone = $("#drop-zone");
   ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.add("dragover"); }));
   ["dragleave", "drop"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove("dragover"); }));
   dropZone.addEventListener("drop", event => {
-    if (event.dataTransfer.files.length > 1) { notify("Choose one evidence file per analysis job."); return; }
-    upload(event.dataTransfer.files[0]);
+    uploadFiles(event.dataTransfer.files);
   });
   document.addEventListener("dragover", event => event.preventDefault());
   document.addEventListener("drop", event => event.preventDefault());
@@ -556,8 +586,8 @@
   });
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", schedulePoll);
-  window.StegoLab = {context:()=>({job:state.job,report:state.report}),selectJob,
-    showTab:tab=>{state.tab=tab;renderReport();},route,notify,api};
+  window.StegoLab = {context:()=>({job:state.job,report:state.report,jobs:state.jobs,tools:state.tools,view:state.view,tab:state.tab}),selectJob,
+    showTab:tab=>{state.tab=tab;renderReport();},openBytes:(artifact_id=null,offset=0)=>{state.byteSelection={artifact_id,offset};state.tab='forensics';renderReport();},route,notify,api,uploadFiles,loadJobs,loadTools,cancelJob};
   route();
   loadHealth();
   setInterval(loadHealth, 15000);

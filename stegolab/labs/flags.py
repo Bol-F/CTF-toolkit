@@ -108,7 +108,13 @@ def scan_report(analysis, prefixes=None, expression=''):
         path = analysis.root / artifact['path']
         if artifact.get('kind') in {'extracted', 'carved', 'lsb', 'tool_extracted', 'pdf_attachment'} or artifact.get('name') == 'strings.json':
             with path.open('rb') as handle: content = handle.read(4 * 1024**2)
-            findings.extend(finder.scan_decoded(content, artifact['name'], [artifact.get('method', artifact.get('kind', 'strings'))]))
+            artifact_matches = finder.scan_decoded(content, artifact['name'], [artifact.get('method', artifact.get('kind', 'strings'))])
+            for match in artifact_matches:
+                match['artifact_id'] = artifact['id']
+            findings.extend(artifact_matches)
+    for match in findings:
+        if analysis.report.get('job_id'):
+            match['source_job_id'] = analysis.report['job_id']
     analysis.report['flag_candidates'] = findings[:500]
     summary_findings = [{**{k:v for k,v in item.items() if k not in {'type','value'}},
                          'type':'central_flag','candidate_value':item['value']} for item in findings[:500]]

@@ -11,6 +11,8 @@ SOURCES = {
                  '402ba4190d329564996a1250b9096f0402452042469f517545c312527cedc41f'),
     'stegseek': ('https://github.com/RickdeJager/stegseek/archive/refs/tags/v0.6.tar.gz',
                 '66cdd8e4e4b815d7fe368843e7df2f0416af0304df35e4f22db9f16c7ae6c771'),
+    'openstego-source': ('https://github.com/syvaidya/openstego/archive/refs/tags/openstego-0.8.6.tar.gz',
+                        '6eb7d1a1e6eb294ab3d2ef38d3c4e0c321b4f9e4a92c209eec86af3c6cbe2668'),
 }
 
 for name,(url,digest) in SOURCES.items():
@@ -18,6 +20,9 @@ for name,(url,digest) in SOURCES.items():
     if hashlib.sha256(content).hexdigest()!=digest: raise SystemExit(f'{name} checksum mismatch')
     root = Path('/opt')/name
     root.mkdir(exist_ok=True)
+    sources = Path('/opt/upstream-sources')
+    sources.mkdir(exist_ok=True)
+    (sources/(name+('.zip' if name=='openstego' else '.tar.gz'))).write_bytes(content)
     if name=='openstego':
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             for member in archive.infolist():

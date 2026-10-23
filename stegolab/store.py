@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import uuid
 
@@ -49,6 +50,13 @@ class Store:
                     reserved_bytes INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS worker_state (id INTEGER PRIMARY KEY, heartbeat REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS flag_index_jobs (job_id TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS flag_index (
+                    job_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                    classification TEXT NOT NULL, search_text TEXT NOT NULL,
+                    candidate_json TEXT NOT NULL, PRIMARY KEY(job_id,ordinal)
+                );
+                CREATE INDEX IF NOT EXISTS flag_classification ON flag_index(classification);
             """)
             db.execute('BEGIN IMMEDIATE')
             if 'parent_id' not in {row[1] for row in db.execute('PRAGMA table_info(jobs)')}:
@@ -78,6 +86,10 @@ class Store:
                 raise CapacityError("Job capacity reached. Delete finished jobs or wait for the queue.")
             if reserved + settings.reservation_bytes > settings.max_storage_bytes:
                 raise CapacityError("Storage budget reached. Delete finished jobs before uploading.")
+            if parent_id:
+                parent = db.execute('SELECT status FROM jobs WHERE id=?', (parent_id,)).fetchone()
+                if not parent or parent['status'] not in TERMINAL:
+                    raise CapacityError('Source investigation is no longer available; refresh the investigation list')
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO jobs(id,filename,mode,status,created_at,reserved_bytes,parent_id) VALUES(?,?,?,?,?,?,?)",
                        (job_id, filename, mode, "uploading", now(), settings.reservation_bytes, parent_id))
@@ -112,6 +124,7 @@ class Store:
             raise ValueError("Invalid terminal status")
         with self.connect() as db:
             db.execute("UPDATE jobs SET status=?,completed_at=?,error=? WHERE id=?", (status, now(), error, job_id))
+            self._index_flags(db, job_id)
 
     def cancel(self, job_id):
         with self.connect() as db:
@@ -125,7 +138,68 @@ class Store:
 
     def delete(self, job_id):
         with self.connect() as db:
+            db.execute('DELETE FROM flag_index WHERE job_id=?', (job_id,))
+            db.execute('DELETE FROM flag_index_jobs WHERE job_id=?', (job_id,))
             db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+    def delete_finished(self, job_id):
+        """Serialize evidence deletion with child-action admission."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('SELECT status FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if not job:
+                return
+            if job['status'] not in TERMINAL:
+                raise ValueError('Cancel the active job and wait for it to finish before deleting')
+            children = db.execute("SELECT COUNT(*) FROM jobs WHERE parent_id=? AND status IN ('uploading','queued','running')", (job_id,)).fetchone()[0]
+            if children:
+                raise ValueError('This evidence is referenced by an active lab action; finish or cancel it first')
+            try:
+                shutil.rmtree(self.settings.jobs_dir / job_id)
+            except FileNotFoundError:
+                pass  # A missing directory must not leave undeletable stale history.
+            db.execute('DELETE FROM flag_index WHERE job_id=?', (job_id,))
+            db.execute('DELETE FROM flag_index_jobs WHERE job_id=?', (job_id,))
+            db.execute('DELETE FROM jobs WHERE id=?', (job_id,))
+
+    def _index_flags(self, db, job_id):
+        from .reporting import flag_candidates
+        report = read_json(self.settings.jobs_dir / job_id / 'report.json', {})
+        candidates = flag_candidates(report)[:500]
+        db.execute('DELETE FROM flag_index WHERE job_id=?', (job_id,))
+        for index, candidate in enumerate(candidates):
+            search = ' '.join(str(candidate.get(key, '')) for key in ('value', 'source_file', 'method', 'evidence'))
+            db.execute('INSERT INTO flag_index VALUES(?,?,?,?,?)',
+                       (job_id, index, candidate['classification'], search, json.dumps(candidate, ensure_ascii=True)))
+        db.execute('INSERT OR IGNORE INTO flag_index_jobs VALUES(?)', (job_id,))
+
+    def index_missing_reports(self):
+        """One-time migration of terminal reports from earlier StegoLab releases."""
+        with self.connect() as db:
+            ids = [row[0] for row in db.execute("SELECT id FROM jobs WHERE status IN ('completed','failed','cancelled','timeout') AND id NOT IN (SELECT job_id FROM flag_index_jobs)")]
+        for job_id in ids:
+            with self.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute('SELECT id FROM jobs WHERE id=?', (job_id,)).fetchone():
+                    self._index_flags(db, job_id)
+
+    def flags(self, query='', classification='all', limit=100, offset=0):
+        condition = "j.status IN ('completed','failed','cancelled','timeout')"
+        parameters = []
+        if query:
+            condition += ' AND instr(lower(f.search_text || ? || j.filename), lower(?)) > 0'
+            parameters.extend([' ', query])
+        if classification != 'all':
+            condition += ' AND f.classification=?'
+            parameters.append(classification)
+        base = ' FROM flag_index f JOIN jobs j ON j.id=f.job_id WHERE ' + condition
+        with self.connect() as db:
+            total = db.execute('SELECT COUNT(*)' + base, parameters).fetchone()[0]
+            rows = db.execute('SELECT f.candidate_json,j.id,j.filename,j.status,j.created_at' + base +
+                              ' ORDER BY j.created_at DESC,f.ordinal LIMIT ? OFFSET ?', (*parameters, limit, offset)).fetchall()
+        candidates = [{**json.loads(row['candidate_json']), 'job_id': row['id'], 'job_filename': row['filename'],
+                       'job_status': row['status'], 'created_at': row['created_at']} for row in rows]
+        return {'candidates': candidates, 'total': total, 'limit': limit, 'offset': offset}
 
     def active_children(self, job_id):
         with self.connect() as db:

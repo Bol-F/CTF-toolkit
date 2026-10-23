@@ -14,6 +14,7 @@ def run_action(job_dir, options):
     if options['operation'] == 'inspect': return analysis.run()
     analysis.run_stage('identification',5,analysis.identification)
     if not analysis.report['file']: raise ValueError('Could not identify evidence')
+    analysis.run_stage('tool_registry',10,analysis.inventory)
     operation = options['operation']
     def action():
         if operation == 'image_prepare':
@@ -40,9 +41,24 @@ def run_action(job_dir, options):
                 parent = analysis.job.parent/context
                 report = json.loads((parent/'report.json').read_text())
                 root = (parent/'artifacts').resolve()
-                report['artifacts'] = [a for a in report.get('artifacts',[]) if (root/a['path']).resolve().is_relative_to(root) and not (root/a['path']).is_symlink()]
+                selected = options.get('source_artifact_id')
+                if selected:
+                    entry = next((a for a in report.get('artifacts', []) if a.get('id') == selected), None)
+                    if not entry:
+                        raise ValueError('Selected source artifact is no longer available')
+                    # The copied evidence bytes belong to this artifact. Do not
+                    # relabel them as the original or scan unrelated siblings.
+                    report = {'job_id': context, 'file': {'filename': entry['name']},
+                              'analyzers': [], 'findings': [], 'artifacts': []}
+                else:
+                    report['artifacts'] = [a for a in report.get('artifacts',[]) if (root/a['path']).resolve().is_relative_to(root) and not (root/a['path']).is_symlink()]
                 proxy = SimpleNamespace(report=report,data=analysis.data,root=root)
             result = scan_report(proxy,options.get('prefixes'),options.get('expression',''))
+            if options.get('source_artifact_id'):
+                for candidate in proxy.report.get('flag_candidates', []):
+                    candidate['artifact_id'] = options['source_artifact_id']
+                for candidate in result.get('findings', []):
+                    candidate['artifact_id'] = options['source_artifact_id']
             analysis.report['flag_candidates'] = proxy.report.get('flag_candidates',[])
             return result
         if operation == 'tool_extract':
@@ -80,7 +96,12 @@ def run_action(job_dir, options):
     result = analysis.run_stage(operation,30,action)
     if result['status']=='failed':
         analysis.report.update(status='failed',errors=result['errors'])
-    analysis.report.update(action={'operation':operation,'parent_job':options.get('parent_job'),'parameters_redacted':True},completed_at=utc_now())
+    public_fields = {'channels','bits','bit_order','direction','reverse','frame','max_bytes','skip_bits','prefixes','expression','tool','attachment','source_artifact_id'}
+    parameters = {key: value for key, value in options.items() if key in public_fields}
+    if operation == 'crypto':
+        parameters['recipe_operations'] = [step.get('operation') for step in options.get('recipe', {}).get('steps', [])]
+    analysis.report.update(action={'operation':operation,'parent_job':options.get('parent_job'),
+                                  'parameters':parameters,'parameters_redacted':True},completed_at=utc_now())
     analysis.bound_report()
     atomic_json(analysis.job/'report.json',analysis.report)
     atomic_json(analysis.job/'progress.json',{'progress':100,'stage':analysis.report['status']})

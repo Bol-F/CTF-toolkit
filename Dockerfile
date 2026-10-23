@@ -9,10 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /root/.local/share/gem
 WORKDIR /app
 COPY requirements.txt .
+COPY config/license-inventory.py /usr/local/share/stegolab/license-inventory.py
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/stegolab/
 RUN pip install -r requirements.txt \
     && groupadd --gid 10001 stegolab \
     && useradd --uid 10001 --gid 10001 --no-create-home stegolab \
-    && mkdir /data && chown 10001:10001 /data
+    && mkdir /data && chown 10001:10001 /data \
+    && python /usr/local/share/stegolab/license-inventory.py
 USER 10001:10001
 EXPOSE 8000
 CMD ["uvicorn", "stegolab.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--limit-concurrency", "32", "--timeout-keep-alive", "5"]
@@ -49,13 +52,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends outguess stegsn
     && python -m venv --system-site-packages /opt/stegoveritas \
     && /opt/stegoveritas/bin/pip install stegoveritas==1.11 \
     && /opt/stegoveritas/bin/python -c "import site,pathlib; pathlib.Path(site.getsitepackages()[0],'debian-binwalk.pth').write_text('/usr/lib/python3/dist-packages\\n')" \
-    && ln -s /opt/stegoveritas/bin/stegoveritas /usr/local/bin/stegoveritas
+    && ln -s /opt/stegoveritas/bin/stegoveritas /usr/local/bin/stegoveritas \
+    && python /usr/local/share/stegolab/license-inventory.py \
+    && /opt/stegoveritas/bin/python /usr/local/share/stegolab/license-inventory.py --python-only
 
 FROM tools-dependencies AS tools
 COPY --chown=root:root stegolab ./stegolab
 COPY --chown=root:root config/imagemagick-policy.xml /etc/ImageMagick-7/policy.xml
 COPY --from=specialized-build /opt/stegseek/build/src/stegseek /usr/local/bin/stegseek
 COPY --from=specialized-build /opt/openstego-final/openstego.jar /opt/openstego/openstego.jar
+COPY --from=specialized-build /opt/upstream-sources /usr/local/share/stegolab/upstream-sources
+COPY --from=specialized-build /opt/openstego-source /usr/local/share/stegolab/openstego-source
+COPY --from=specialized-build /opt/stegseek/stegseek-0.6/COPYING /usr/local/share/stegolab/StegSeek-COPYING
 COPY config/openstego /usr/local/bin/openstego
 RUN chmod 755 /usr/local/bin/openstego
 USER 10001:10001

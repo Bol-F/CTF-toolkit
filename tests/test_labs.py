@@ -167,3 +167,41 @@ def test_real_qr_contents_reach_flagfinder(samples,tmp_path):
     if not shutil.which('zbarimg'):pytest.skip('zbarimg is installed in Docker')
     report=analyze_job(make_job(tmp_path/'qr',samples['qr.png'].read_bytes()),'deep')
     assert any(f['value']=='CTF{qr_only_known_answer}' and 'zbarimg' in str(f['history']) for f in report['flag_candidates'])
+
+
+def test_real_ocr_contents_reach_flagfinder(samples,tmp_path):
+    if not shutil.which('tesseract'):pytest.skip('Tesseract is installed in Docker')
+    report=analyze_job(make_job(tmp_path/'ocr',samples['ocr.png'].read_bytes()),'deep')
+    assert any(f['value']=='CTF{OCR_KNOWN_ANSWER}' and 'tesseract' in str(f['history']) for f in report['flag_candidates'])
+
+
+def test_pdf_attachment_extraction_ignores_embedded_traversal_name(tmp_path):
+    if not shutil.which('pdfdetach'):pytest.skip('pdfdetach is installed in Docker')
+    payload=b'flag{pdf_attachment_bytes}\n'
+    objects=[b'<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(clue.txt) 4 0 R] >> >> >>',
+             b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+             b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>',
+             b'<< /Type /Filespec /F (../../escape.txt) /EF << /F 5 0 R >> >>',
+             f'<< /Type /EmbeddedFile /Length {len(payload)} >>\nstream\n'.encode()+payload+b'endstream']
+    content=bytearray(b'%PDF-1.4\n');offsets=[0]
+    for number,obj in enumerate(objects,1):
+        offsets.append(len(content));content.extend(f'{number} 0 obj\n'.encode()+obj+b'\nendobj\n')
+    xref=len(content)
+    content.extend(f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode())
+    for offset in offsets[1:]:content.extend(f'{offset:010} 00000 n \n'.encode())
+    content.extend(f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+    root=make_job(tmp_path/'pdf',bytes(content),'attachment.pdf')
+    report=run_action(root,{'operation':'pdf_extract','attachment':1})
+    assert report['analyzers'][-1]['status']=='completed',report
+    artifact=next(a for a in report['artifacts'] if a['kind']=='pdf_attachment')
+    assert (root/'artifacts'/artifact['path']).read_bytes()==payload
+    assert not (tmp_path/'escape.txt').exists()
+
+
+def test_recommendations_explain_base64_without_claiming_a_flag(tmp_path,no_tools):
+    import base64
+    content=base64.b64encode(b'A printable clue with no flag pattern inside.')
+    report=analyze_job(make_job(tmp_path/'encoded',content,'encoded.txt'),'quick')
+    suggestions=[r for r in report['recommended_operations'] if r['operation']=='crypto']
+    assert suggestions and 'printable' in suggestions[0]['why'].lower()
+    assert suggestions[0]['guarantees_hidden_data'] is False
